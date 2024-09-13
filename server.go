@@ -171,6 +171,7 @@ type serverOptions struct {
 	maxHeaderListSize     *uint32
 	headerTableSize       *uint32
 	numServerWorkers      uint32
+	longLivedMethods      map[string]bool
 	bufferPool            mem.BufferPool
 	waitForHandlers       bool
 }
@@ -590,6 +591,15 @@ func NumStreamWorkers(numServerWorkers uint32) ServerOption {
 	// number of CPUs available is most performant; requires thorough testing.
 	return newFuncServerOption(func(o *serverOptions) {
 		o.numServerWorkers = numServerWorkers
+	})
+}
+
+func LongLivedMethodsAndStreams(longLivedMethods []string) ServerOption {
+
+	return newFuncServerOption(func(o *serverOptions) {
+		for _, l := range longLivedMethods {
+			o.longLivedMethods[l] = true
+		}
 	})
 }
 
@@ -1029,7 +1039,7 @@ func (s *Server) serveStreams(ctx context.Context, st transport.ServerTransport,
 			s.handleStream(st, stream)
 		}
 
-		if s.opts.numServerWorkers > 0 && s.isUnaryRPCMethod(stream.Method()) {
+		if s.opts.numServerWorkers > 0 && !s.isLongLivedMethod(stream.Method()) {
 			select {
 			case s.serverWorkerChannel <- f:
 				return
@@ -2206,21 +2216,14 @@ func newHandlerQuota(n uint32) *atomicSemaphore {
 	return a
 }
 
-// isUnaryRPCMethod returns true if the passed in method corresponds to a registered
-// unary RPC method on the server.
-func (s *Server) isUnaryRPCMethod(serviceMethod string) bool {
+func (s *Server) isLongLivedMethod(serviceMethod string) bool {
 	serviceMethod = strings.TrimPrefix(serviceMethod, "/")
 	pos := strings.LastIndex(serviceMethod, "/")
 	if pos == -1 {
 		return false
 	}
-	service := serviceMethod[:pos]
+
 	method := serviceMethod[pos+1:]
-	srv, knownService := s.services[service]
-	if knownService {
-		if _, ok := srv.methods[method]; ok {
-			return true
-		}
-	}
-	return false
+
+	return s.opts.longLivedMethods[method]
 }
